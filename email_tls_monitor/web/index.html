@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email TLS Security Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z' fill='%233987e5'/%3E%3C/svg%3E">
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  color-scheme: dark;
+  --bg: #0f1012;
+  --surface-1: #17181a;
+  --surface-2: #1f2023;
+  --surface-3: #292a2e;
+  --border: #2e3034;
+  --border-strong: #3d3f44;
+  --text-primary: #f4f4f2;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8d8c85;
+  --accent: #3987e5;
+  --accent-soft: rgba(57,135,229,.16);
+  --grid: #2a2b2e;
+  /* status (fixed, never themed) */
+  --good: #0ca30c;  --good-soft: rgba(12,163,12,.16);
+  --warn: #fab219;  --warn-soft: rgba(250,178,25,.16);
+  --crit: #d03b3b;  --crit-soft: rgba(208,59,59,.18);
+  /* categorical: protocols */
+  --smtp: #3987e5; --imap: #d95926; --pop3: #199e70;
+  --shadow: 0 8px 30px rgba(0,0,0,.45);
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f3f3f1;
+  --surface-1: #fcfcfb;
+  --surface-2: #f4f4f2;
+  --surface-3: #eaeae6;
+  --border: #e1e0db;
+  --border-strong: #cfcec8;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #7a7973;
+  --accent: #2a78d6;
+  --accent-soft: rgba(42,120,214,.12);
+  --grid: #ebeae6;
+  --smtp: #2a78d6; --imap: #eb6834; --pop3: #1baf7a;
+  --shadow: 0 8px 30px rgba(0,0,0,.12);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text-primary);
+  font: 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+button, select, input { font: inherit; color: inherit; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--text-muted); }
+.sec { color: var(--text-secondary); }
+
+/* ------------------------------------------------------------------ header */
+header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 24px; border-bottom: 1px solid var(--border);
+  background: var(--surface-1); position: sticky; top: 0; z-index: 20;
+}
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand svg { flex: none; }
+.brand h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; font-weight: 650; }
+.brand p { margin: 0; font-size: 12px; color: var(--text-muted); }
+.hdr-right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; font-size: 12px;
+  color: var(--text-secondary); background: var(--surface-2); white-space: nowrap;
+}
+.chip b { color: var(--text-primary); font-weight: 600; }
+.status-pill { font-weight: 600; letter-spacing: .04em; max-width: 100%; overflow: hidden; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.status-pill.live .dot, .status-pill.demo .dot, .status-pill.pcap .dot { animation: pulse 1.4s infinite; }
+.status-pill.live .dot { background: var(--crit); }
+.status-pill.demo .dot { background: var(--accent); }
+.status-pill.pcap .dot { background: var(--warn); }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 currentColor} 70%{box-shadow:0 0 0 7px transparent} 100%{box-shadow:0 0 0 0 transparent} }
+.status-pill.live { color: var(--crit); } .status-pill.demo { color: var(--accent); } .status-pill.pcap { color: var(--warn); }
+.icon-btn {
+  width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-2); cursor: pointer; display: grid; place-items: center;
+}
+.icon-btn:hover { border-color: var(--border-strong); }
+
+/* ------------------------------------------------------------------ layout */
+main { padding: 18px 24px 40px; max-width: 1680px; margin: 0 auto; display: grid; gap: 16px; }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; min-width: 0;
+}
+.card h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 12px;
+  color: var(--text-muted); font-weight: 600; display: flex; align-items: center; gap: 8px;
+}
+.card h2 .spacer { flex: 1; }
+
+/* controls */
+.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn {
+  height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border-strong);
+  background: var(--surface-2); cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 550; white-space: nowrap; transition: border-color .15s, background .15s;
+}
+.btn:hover { border-color: var(--text-muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--crit); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.group { display: inline-flex; gap: 0; }
+.group > * { border-radius: 0; }
+.group > *:first-child { border-radius: 8px 0 0 8px; }
+.group > *:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+select, input[type=text] {
+  height: 34px; border: 1px solid var(--border-strong); background: var(--surface-2);
+  padding: 0 10px; border-radius: 8px; min-width: 0;
+}
+.ctl-sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+.ctl-right { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.banner {
+  display: none; margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+  background: var(--crit-soft); color: var(--text-primary); border: 1px solid var(--crit);
+  font-size: 13px;
+}
+.banner.show { display: flex; gap: 10px; align-items: flex-start; }
+.hint { font-size: 12.5px; color: var(--text-muted); margin-top: 10px; }
+.hint:empty { display: none; }
+
+/* pipeline strip */
+.pipeline { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 0; position: relative; }
+.stage {
+  position: relative; padding: 10px 14px 10px 18px; border: 1px solid var(--border);
+  background: var(--surface-2); margin-right: 14px; border-radius: 10px; min-width: 0;
+  transition: border-color .3s, box-shadow .3s;
+}
+.stage:not(:last-child)::after {
+  content: ""; position: absolute; right: -14px; top: 50%; width: 14px; height: 2px;
+  background: var(--border-strong);
+}
+.stage:last-child { margin-right: 0; }
+.stage .k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
+.stage .v { font-size: 15px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage .s { font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* KPI */
+.kpis { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 12px; }
+.kpi { padding: 14px 16px; }
+.kpi .label { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.kpi .value { font-size: 30px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.kpi .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.kpi.crit { border-color: color-mix(in srgb, var(--crit) 55%, var(--border)); }
+.kpi.crit .value { color: var(--text-primary); }
+.kpi .bar { height: 4px; border-radius: 4px; background: var(--surface-3); margin-top: 10px; overflow: hidden; }
+.kpi .bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); width: 0; transition: width .4s; }
+
+/* main grid */
+.grid-main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(340px, 1fr); gap: 16px; align-items: start; }
+.side { display: grid; gap: 16px; }
+
+/* verdict badge */
+.verdict {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+  border-radius: 6px; font-size: 11.5px; font-weight: 650; letter-spacing: .03em; white-space: nowrap;
+}
+.verdict svg { width: 12px; height: 12px; }
+.verdict.BENIGN { background: var(--good-soft); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--good); }
+.verdict.SUSPICIOUS { background: var(--warn-soft); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--warn); }
+.verdict.MALICIOUS { background: var(--crit-soft); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--crit); }
+.verdict.BENIGN svg { color: var(--good); } .verdict.SUSPICIOUS svg { color: var(--warn); } .verdict.MALICIOUS svg { color: var(--crit); }
+
+.proto { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; }
+.proto i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* feed */
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+.seg { display: inline-flex; max-width: 100%; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.seg button {
+  border: 0; background: transparent; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  color: var(--text-secondary); font-size: 12.5px; font-weight: 550;
+}
+.seg button.on { background: var(--surface-3); color: var(--text-primary); }
+.seg button .n { color: var(--text-muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.search { flex: 1; min-width: 140px; }
+.table-wrap { overflow: auto; max-height: 640px; border-radius: 8px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  position: sticky; top: 0; background: var(--surface-2); text-align: left; font-weight: 600;
+  font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em;
+  padding: 9px 10px; border-bottom: 1px solid var(--border); z-index: 1; white-space: nowrap;
+}
+tbody td { padding: 9px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+tbody tr { cursor: pointer; transition: background .12s; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr.sel { background: var(--accent-soft); }
+tbody tr.new { animation: rowin .9s ease-out; }
+@keyframes rowin { from { background: var(--accent-soft); } to { background: transparent; } }
+.ep { font-family: var(--mono); font-size: 12px; }
+.ep { line-height: 1.35; }
+.ep .arrow { color: var(--text-muted); margin: 0 4px 0 0; }
+.signal { font-family: var(--mono); font-size: 12px; color: var(--text-secondary); max-width: 150px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: middle; }
+.risk { display: flex; align-items: center; gap: 8px; min-width: 96px; }
+.risk .track { flex: 1; height: 6px; border-radius: 3px; background: var(--surface-3); position: relative; overflow: hidden; }
+.risk .track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+.risk .num { font-family: var(--mono); font-size: 12px; width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.tlsv { font-family: var(--mono); font-size: 12px; }
+.tlsv.none { color: var(--crit); }
+.empty { padding: 48px 16px; text-align: center; color: var(--text-muted); }
+.empty svg { opacity: .5; margin-bottom: 8px; }
+
+/* charts */
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--text-muted); font-size: 11px; font-family: var(--sans); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.stack { display: flex; height: 22px; border-radius: 6px; overflow: hidden; gap: 2px; background: var(--surface-1); }
+.stack > div { height: 100%; min-width: 0; transition: flex-grow .4s; border-radius: 4px; }
+.hbar { display: grid; grid-template-columns: minmax(0, 150px) 1fr 36px; gap: 10px; align-items: center; margin: 7px 0; font-size: 12.5px; }
+.hbar .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--text-secondary); }
+.hbar .tr { height: 10px; background: var(--surface-2); border-radius: 0 4px 4px 0; position: relative; }
+.hbar .tr i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; background: var(--accent); transition: width .4s; }
+.hbar .val { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12px; }
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 60; background: var(--surface-3); color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: var(--shadow); opacity: 0; transition: opacity .1s; max-width: 280px;
+}
+.tooltip.show { opacity: 1; }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 100vw); background: var(--surface-1);
+  border-left: 1px solid var(--border); z-index: 50; transform: translateX(100%); transition: transform .25s ease;
+  display: flex; flex-direction: column; box-shadow: var(--shadow);
+}
+.drawer.show { transform: none; }
+.drawer-head { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; }
+.drawer-body { overflow: auto; padding: 18px 20px 40px; display: grid; gap: 18px; }
+.gauge { display: flex; align-items: center; gap: 18px; }
+.gauge .big { font-size: 44px; font-weight: 750; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+.scale { position: relative; height: 10px; border-radius: 5px; margin: 14px 0 6px; background: linear-gradient(90deg, var(--good) 0 35%, var(--warn) 35% 75%, var(--crit) 75% 100%); opacity: .9; }
+.scale .needle { position: absolute; top: -5px; width: 3px; height: 20px; border-radius: 2px; background: var(--text-primary); box-shadow: 0 0 0 2px var(--surface-1); transform: translateX(-1px); transition: left .4s; }
+.scale-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+.section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 8px; font-weight: 600; }
+.kv { display: grid; grid-template-columns: 150px minmax(0,1fr); gap: 6px 12px; font-size: 13px; }
+.kv dt { color: var(--text-muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+.ind { display: grid; grid-template-columns: 1fr 70px 44px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.ind:last-child { border-bottom: 0; }
+.ind .name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.ind .detail { font-size: 12px; color: var(--text-secondary); }
+.ind .w { height: 6px; background: var(--surface-3); border-radius: 3px; position: relative; }
+.ind .w i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--crit); border-radius: 3px; }
+.formula { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; color: var(--text-secondary); }
+.feat { display: grid; grid-template-columns: 170px 1fr 70px; gap: 10px; align-items: center; font-size: 12px; padding: 3px 0; }
+.feat .n { font-family: var(--mono); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
+.feat .t { height: 6px; background: var(--surface-2); border-radius: 3px; position: relative; }
+.feat .t i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.feat .v { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+.pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill-list span { font-family: var(--mono); font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); }
+.pill-list span.bad { border-color: var(--crit); background: var(--crit-soft); }
+
+/* toast */
+.toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 10px; z-index: 70; width: min(380px, calc(100vw - 32px)); }
+.toast {
+  background: var(--surface-1); border: 1px solid var(--crit); border-left: 4px solid var(--crit);
+  border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); cursor: pointer;
+  animation: toastin .25s ease-out;
+}
+.toast .t1 { font-weight: 650; display: flex; gap: 8px; align-items: center; }
+.toast .t2 { font-size: 12.5px; color: var(--text-secondary); margin-top: 4px; }
+@keyframes toastin { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+@media (max-width: 1200px) {
+  .kpis { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .grid-main { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 760px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+  .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .pipeline { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  .stage { margin-right: 0; }
+  .stage:not(:last-child)::after { display: none; }
+  .ctl-right { margin-left: 0; }
+  .kv { grid-template-columns: 110px minmax(0,1fr); }
+  .feat { grid-template-columns: 120px 1fr 60px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="var(--accent)"/>
+      <path d="M8 9.5h8v5.5H8z M8 9.5l4 3 4-3" fill="none" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h1>Email TLS Security Monitor</h1>
+      <p>Passive SMTP · IMAP · POP3 cryptographic posture analysis</p>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <span class="chip status-pill idle" id="statusPill"><span class="dot"></span><span id="statusText">IDLE</span></span>
+    <span class="chip">Engine <b id="engineChip">…</b></span>
+    <span class="chip">Scorer <b id="scorerChip">…</b></span>
+    <button class="icon-btn" id="themeBtn" title="Toggle light/dark" aria-label="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- ============================================================ controls -->
+  <section class="card">
+    <div class="controls">
+      <button class="btn primary" id="demoBtn" title="Replay the bundled sample capture through the real pipeline">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Demo replay
+      </button>
+      <label class="btn" for="pcapInput" title="Analyse a .pcap / .pcapng file">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg>Upload PCAP
+      </label>
+      <input type="file" id="pcapInput" accept=".pcap,.pcapng,.cap" hidden>
+      <span class="ctl-sep"></span>
+      <div class="group">
+        <select id="ifaceSel" aria-label="Capture interface"></select>
+        <button class="btn" id="liveBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>Live capture
+        </button>
+      </div>
+      <button class="btn danger" id="stopBtn" disabled>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>Stop
+      </button>
+      <div class="ctl-right">
+        <button class="btn" id="clearBtn">Clear</button>
+        <a class="btn" id="exportBtn" href="/api/export" download style="text-decoration:none">Export JSONL</a>
+      </div>
+    </div>
+    <div class="banner" id="banner">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--crit)" stroke-width="2" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 16.5v.5"/></svg>
+      <div id="bannerText"></div>
+    </div>
+    <div class="hint" id="hint"></div>
+  </section>
+
+  <!-- ============================================================ pipeline -->
+  <section class="card">
+    <h2>Pipeline</h2>
+    <div class="pipeline">
+      <div class="stage" id="st0"><div class="k">1 · Capture</div><div class="v" id="pPackets">0 packets</div><div class="s">Scapy · BPF on 7 email ports</div></div>
+      <div class="stage" id="st1"><div class="k">2 · Reassemble</div><div class="v" id="pFlows">0 flows</div><div class="s" id="pOpen">bidirectional TCP sessions</div></div>
+      <div class="stage" id="st2"><div class="k">3 · Dissect</div><div class="v" id="pEngine">—</div><div class="s">TLS · X.509 · JA3/JA3S · MIME</div></div>
+      <div class="stage" id="st3"><div class="k">4 · Features</div><div class="v" id="pFeat">20-d vector</div><div class="s">entropy · lifespan · key size</div></div>
+      <div class="stage" id="st4"><div class="k">5 · Score</div><div class="v" id="pScorer">—</div><div class="s" id="pThr">noisy-OR evidence</div></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ KPIs -->
+  <section class="kpis">
+    <div class="card kpi"><div class="label">Flows analysed</div><div class="value" id="kFlows">0</div><div class="sub" id="kFlowsSub">no data yet</div></div>
+    <div class="card kpi crit"><div class="label"><span class="verdict MALICIOUS" style="height:18px;padding:0 6px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm1 15h-2v2h2v-2zm0-7h-2v5h2v-5z"/></svg>MALICIOUS</span></div><div class="value" id="kMal">0</div><div class="sub" id="kMalSub">—</div></div>
+    <div class="card kpi"><div class="label"><span class="verdict SUSPICIOUS" style="height:18px;padding:0 6px"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>SUSPICIOUS</span></div><div class="value" id="kSus">0</div><div class="sub" id="kSusSub">—</div></div>
+    <div class="card kpi"><div class="label">TLS coverage</div><div class="value" id="kTls">—</div><div class="sub" id="kTlsSub">sessions encrypted</div><div class="bar"><i id="kTlsBar"></i></div></div>
+    <div class="card kpi"><div class="label">Cleartext credentials</div><div class="value" id="kAuth">0</div><div class="sub">AUTH/USER/LOGIN before TLS</div></div>
+    <div class="card kpi"><div class="label">Weak crypto</div><div class="value" id="kWeak">0</div><div class="sub">weak cipher / key / self-signed</div></div>
+  </section>
+
+  <!-- ============================================================ main -->
+  <section class="grid-main">
+    <div class="card">
+      <h2>Flow feed <span class="spacer"></span><span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400" id="feedCount"></span></h2>
+      <div class="filters">
+        <div class="seg" id="verdictSeg">
+          <button data-v="ALL" class="on">All<span class="n" id="nAll">0</span></button>
+          <button data-v="MALICIOUS">Malicious<span class="n" id="nMal">0</span></button>
+          <button data-v="SUSPICIOUS">Suspicious<span class="n" id="nSus">0</span></button>
+          <button data-v="BENIGN">Benign<span class="n" id="nBen">0</span></button>
+        </div>
+        <div class="seg" id="protoSeg">
+          <button data-p="ALL" class="on">Any</button>
+          <button data-p="SMTP">SMTP</button>
+          <button data-p="IMAP">IMAP</button>
+          <button data-p="POP3">POP3</button>
+        </div>
+        <input type="text" class="search" id="search" placeholder="Search IP, SNI, signal, subject…">
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Proto</th><th>Client → Server</th><th>TLS</th><th>Top signal</th><th>Risk</th><th>Verdict</th></tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+        <div class="empty" id="feedEmpty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9 6 9-6M3 7v10h18V7M3 7h18"/></svg>
+          <div>No flows yet. Click <b>Demo replay</b>, upload a pcap, or start a live capture.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h2>Verdict mix</h2>
+        <div class="stack" id="mixBar"></div>
+        <div class="legend" id="mixLegend"></div>
+      </div>
+      <div class="card">
+        <h2>Risk per flow <span class="spacer"></span><span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">last 60</span></h2>
+        <div class="chart" id="riskChart"></div>
+        <div class="legend">
+          <span><i style="background:var(--crit)"></i>Malicious</span>
+          <span><i style="background:var(--warn)"></i>Suspicious</span>
+          <span><i style="background:var(--good)"></i>Benign</span>
+          <span class="muted">dashed = thresholds</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Top threat signals</h2>
+        <div id="sigBars"><div class="muted" style="font-size:13px">No indicators fired yet.</div></div>
+      </div>
+      <div class="card">
+        <h2>TLS posture</h2>
+        <div id="tlsBars"></div>
+      </div>
+      <div class="card">
+        <h2>Protocols</h2>
+        <div id="protoBars"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div style="flex:1;min-width:0" id="dHead"></div>
+    <button class="icon-btn" id="closeDrawer" aria-label="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body" id="dBody"></div>
+</aside>
+<div class="tooltip" id="tip"></div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ helpers */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtTime = (t) => { const d = new Date((t || 0) * 1000); return d.toLocaleTimeString([], {hour12: false}); };
+const pct = (x) => (x * 100).toFixed(0) + "%";
+const ICON = {
+  MALICIOUS: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm1 15h-2v2h2v-2zm0-7h-2v5h2v-5z"/></svg>',
+  SUSPICIOUS: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>',
+  BENIGN: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="M4 12.5l5 5L20 6.5"/></svg>',
+};
+const VCOLOR = { MALICIOUS: "var(--crit)", SUSPICIOUS: "var(--warn)", BENIGN: "var(--good)" };
+const PCOLOR = { SMTP: "var(--smtp)", IMAP: "var(--imap)", POP3: "var(--pop3)" };
+const verdict = (v) => `<span class="verdict ${v}">${ICON[v] || ""}${v}</span>`;
+const proto = (p) => `<span class="proto"><i style="background:${PCOLOR[p] || "var(--text-muted)"}"></i>${esc(p)}</span>`;
+const WEAK = new Set(["weak_cipher", "weak_cert_key", "self_signed_cert", "legacy_tls", "deprecated_tls", "cert_validation_failed"]);
+
+/* ------------------------------------------------------------------ state */
+const S = { recs: [], info: null, status: {}, fv: "ALL", fp: "ALL", q: "", sel: null, thr: [0.35, 0.75] };
+let renderQueued = false;
+function schedule() { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; renderAll(); }); } }
+
+/* ------------------------------------------------------------------ theme */
+(function initTheme() {
+  let t = null;
+  try { t = localStorage.getItem("emailmon-theme"); } catch (e) {}
+  if (t) document.documentElement.dataset.theme = t;
+  $("themeBtn").onclick = () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("emailmon-theme", next); } catch (e) {}
+  };
+})();
+
+/* ------------------------------------------------------------------ API */
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+function showError(msg) {
+  $("bannerText").textContent = msg || "";
+  $("banner").classList.toggle("show", !!msg);
+}
+$("demoBtn").onclick = () => api("/api/demo", {method: "POST"}).catch(e => showError(e.message));
+$("liveBtn").onclick = () => {
+  const iface = $("ifaceSel").value;
+  api("/api/live", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({interface: iface})})
+    .catch(e => showError(e.message));
+};
+$("stopBtn").onclick = () => api("/api/stop", {method: "POST"}).catch(e => showError(e.message));
+$("clearBtn").onclick = () => api("/api/clear", {method: "POST"}).catch(e => showError(e.message));
+$("pcapInput").onchange = async (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  try {
+    await api("/api/pcap", {method: "POST", headers: {"X-Filename": f.name, "Content-Type": "application/octet-stream"}, body: f});
+  } catch (e) { showError(e.message); }
+  ev.target.value = "";
+};
+
+async function loadInfo() {
+  const info = await api("/api/info");
+  S.info = info; S.thr = info.thresholds || S.thr;
+  $("engineChip").textContent = info.engine;
+  $("scorerChip").textContent = info.scorer;
+  $("pEngine").textContent = info.engine === "native" ? "Native + OpenSSL" : "Zeek + OpenSSL";
+  $("pScorer").textContent = info.scorer === "heuristic" ? "Heuristic" : info.scorer.replace(/^model:/, "ML: ");
+  $("pFeat").textContent = `${info.features.length}-d vector`;
+  $("pThr").textContent = `thresholds ${S.thr[0]} / ${S.thr[1]}`;
+  const sel = $("ifaceSel");
+  const pref = info.interfaces.find(i => /^(wl|en|eth)/.test(i)) || info.interfaces[0];
+  sel.innerHTML = info.interfaces.map(i => `<option ${i === pref ? "selected" : ""}>${esc(i)}</option>`).join("") || "<option>any</option>";
+  $("hint").textContent = info.is_root ? "" :
+    "Live capture needs root: restart with  sudo .venv/bin/python dashboard.py  — demo replay and pcap upload work without it.";
+}
+
+/* ------------------------------------------------------------------ SSE */
+function connect() {
+  const es = new EventSource("/api/events");
+  es.addEventListener("flow", (e) => {
+    const r = JSON.parse(e.data);
+    r._new = true;
+    S.recs.push(r);
+    if (S.recs.length > 5000) S.recs.shift();
+    flashPipeline();
+    if (r.rating.classification === "MALICIOUS") toast(r);
+    schedule();
+  });
+  es.addEventListener("status", (e) => { S.status = JSON.parse(e.data); renderStatus(); });
+  es.addEventListener("clear", () => { S.recs = []; closeDrawer(); schedule(); });
+  es.onerror = () => { renderStatus(true); };
+  es.onopen = () => { renderStatus(false); };
+}
+async function loadState() {
+  const st = await api("/api/state");
+  S.recs = st.records; S.status = st.status;
+  renderStatus(); schedule();
+}
+
+/* ------------------------------------------------------------------ status */
+function renderStatus(disconnected) {
+  const st = S.status || {};
+  const pill = $("statusPill");
+  const mode = disconnected ? "idle" : (st.mode || "idle");
+  pill.className = "chip status-pill " + mode;
+  const label = { live: "LIVE", demo: "DEMO", pcap: "PCAP", idle: "IDLE" }[mode] || mode.toUpperCase();
+  $("statusText").textContent = disconnected ? "OFFLINE" : (st.detail && mode !== "idle" ? `${label} · ${st.detail}` : label);
+  $("stopBtn").disabled = mode === "idle";
+  $("pPackets").textContent = `${(st.packets || 0).toLocaleString()} packets`;
+  $("pOpen").textContent = mode === "live" ? `${st.open_flows || 0} open sessions` : "bidirectional TCP sessions";
+  showError(disconnected ? "Lost connection to dashboard.py — is it still running?" : st.error);
+}
+let flashT;
+function flashPipeline() {
+  const ids = ["st0", "st1", "st2", "st3", "st4"];
+  ids.forEach((id, i) => setTimeout(() => $(id).classList.add("flash"), i * 90));
+  clearTimeout(flashT);
+  flashT = setTimeout(() => ids.forEach(id => $(id).classList.remove("flash")), 700);
+}
+
+/* ------------------------------------------------------------------ derived */
+function topSignal(r) { const i = r.rating.indicators; return i && i.length ? i[0].signal : ""; }
+function tlsLabel(r) {
+  const t = r.tls || {};
+  if (t.observed) {
+    const v = t.version || "";
+    const m = v.match(/^TLSv?1?\.?(\d)$|^TLSv1(\d)$/i);
+    const nice = /^SSL/i.test(v) ? v.replace(/v/i, " ") : m ? `TLS 1.${m[1] || m[2]}` : (v || "TLS");
+    return nice + (t.starttls ? " +STARTTLS" : "");
+  }
+  return "none";
+}
+function tlsBucket(r) {
+  const t = r.tls || {};
+  if (!t.observed) return "No TLS (cleartext)";
+  const v = t.version || "";
+  if (/13/.test(v)) return "TLS 1.3";
+  if (/12/.test(v)) return "TLS 1.2";
+  return "TLS ≤ 1.1 / SSL";
+}
+function matches(r) {
+  if (S.fv !== "ALL" && r.rating.classification !== S.fv) return false;
+  if (S.fp !== "ALL" && r.flow.protocol !== S.fp) return false;
+  if (S.q) {
+    const hay = [r.flow.orig_h, r.flow.resp_h, r.flow.resp_p, r.tls?.sni, r.tls?.cipher, r.certificate?.subject,
+      ...(r.email?.subjects || []), ...(r.rating.indicators || []).map(i => i.signal)].join(" ").toLowerCase();
+    if (!hay.includes(S.q)) return false;
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ render */
+function renderAll() {
+  renderKPIs(); renderFeed(); renderMix(); renderRisk(); renderSignals(); renderTls(); renderProtos();
+  S.recs.forEach(r => r._new = false);
+}
+
+function renderKPIs() {
+  const R = S.recs, n = R.length;
+  const c = { MALICIOUS: 0, SUSPICIOUS: 0, BENIGN: 0 };
+  let tls = 0, auth = 0, weak = 0;
+  for (const r of R) {
+    c[r.rating.classification] = (c[r.rating.classification] || 0) + 1;
+    if (r.tls?.observed) tls++;
+    if (r.email?.cleartext_auth) auth++;
+    if ((r.rating.indicators || []).some(i => WEAK.has(i.signal))) weak++;
+  }
+  $("kFlows").textContent = n.toLocaleString();
+  $("kFlowsSub").textContent = n ? `${new Set(R.map(r => r.flow.resp_h)).size} servers · ${new Set(R.map(r => r.flow.orig_h)).size} clients` : "no data yet";
+  $("kMal").textContent = c.MALICIOUS; $("kMalSub").textContent = n ? pct(c.MALICIOUS / n) + " of flows" : "—";
+  $("kSus").textContent = c.SUSPICIOUS; $("kSusSub").textContent = n ? pct(c.SUSPICIOUS / n) + " of flows" : "—";
+  $("kTls").textContent = n ? pct(tls / n) : "—";
+  $("kTlsSub").textContent = n ? `${tls} of ${n} sessions encrypted` : "sessions encrypted";
+  $("kTlsBar").style.width = n ? (tls / n * 100) + "%" : "0";
+  $("kAuth").textContent = auth; $("kWeak").textContent = weak;
+  $("nAll").textContent = n; $("nMal").textContent = c.MALICIOUS; $("nSus").textContent = c.SUSPICIOUS; $("nBen").textContent = c.BENIGN;
+  $("pFlows").textContent = `${n.toLocaleString()} flows`;
+}
+
+function renderFeed() {
+  const rows = [];
+  let shown = 0;
+  for (let i = S.recs.length - 1; i >= 0 && shown < 400; i--) {
+    const r = S.recs[i];
+    if (!matches(r)) continue;
+    shown++;
+    const f = r.flow, p = r.rating.probability, v = r.rating.classification;
+    const tl = tlsLabel(r);
+    rows.push(`<tr data-i="${i}" class="${r._new ? "new" : ""} ${S.sel === r ? "sel" : ""}">
+      <td class="mono muted">${fmtTime(r.seen_at || f.start)}</td>
+      <td>${proto(f.protocol)}</td>
+      <td class="ep"><span class="muted">${esc(f.orig_h)}</span><br><span class="arrow">→</span>${esc(f.resp_h)}:<b>${f.resp_p}</b></td>
+      <td class="tlsv ${tl === "none" ? "none" : ""}">${esc(tl)}</td>
+      <td><span class="signal" title="${esc(topSignal(r))}">${esc(topSignal(r)) || '<span class="muted">—</span>'}</span></td>
+      <td><div class="risk"><div class="track"><i style="width:${(p * 100).toFixed(1)}%;background:${VCOLOR[v]}"></i></div><span class="num">${p.toFixed(2)}</span></div></td>
+      <td>${verdict(v)}</td></tr>`);
+  }
+  $("feed").innerHTML = rows.join("");
+  $("feedEmpty").style.display = S.recs.length ? (shown ? "none" : "block") : "block";
+  if (S.recs.length && !shown) $("feedEmpty").querySelector("div").textContent = "No flows match the current filters.";
+  else $("feedEmpty").querySelector("div").innerHTML = "No flows yet. Click <b>Demo replay</b>, upload a pcap, or start a live capture.";
+  $("feedCount").textContent = S.recs.length ? `showing ${shown} of ${S.recs.length}` : "";
+}
+$("feed").onclick = (e) => { const tr = e.target.closest("tr"); if (tr) openDrawer(S.recs[+tr.dataset.i]); };
+$("verdictSeg").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.fv = b.dataset.v; [...$("verdictSeg").children].forEach(x => x.classList.toggle("on", x === b)); schedule(); };
+$("protoSeg").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.fp = b.dataset.p; [...$("protoSeg").children].forEach(x => x.classList.toggle("on", x === b)); schedule(); };
+$("search").oninput = (e) => { S.q = e.target.value.trim().toLowerCase(); schedule(); };
+
+function renderMix() {
+  const c = { MALICIOUS: 0, SUSPICIOUS: 0, BENIGN: 0 };
+  S.recs.forEach(r => c[r.rating.classification]++);
+  const n = S.recs.length || 1;
+  const order = ["MALICIOUS", "SUSPICIOUS", "BENIGN"];
+  $("mixBar").innerHTML = S.recs.length ? order.filter(k => c[k]).map(k =>
+    `<div style="flex-grow:${c[k]};background:${VCOLOR[k]}" data-tip="${k}: ${c[k]} (${pct(c[k] / n)})"></div>`).join("")
+    : `<div style="flex-grow:1;background:var(--surface-3)"></div>`;
+  $("mixLegend").innerHTML = order.map(k => `<span><i style="background:${VCOLOR[k]}"></i>${k[0] + k.slice(1).toLowerCase()} <b>${c[k]}</b> <span class="muted">${S.recs.length ? pct(c[k] / n) : ""}</span></span>`).join("");
+}
+
+function renderRisk() {
+  const el = $("riskChart");
+  const W = Math.max(280, el.clientWidth || 360), H = 170, L = 30, Rm = 8, T = 8, B = 20;
+  const pts = S.recs.slice(-60);
+  const x = (i) => L + (pts.length <= 1 ? (W - L - Rm) / 2 : i * (W - L - Rm) / (pts.length - 1));
+  const y = (p) => T + (1 - p) * (H - T - B);
+  let s = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Risk probability per flow">`;
+  for (const g of [0, 0.25, 0.5, 0.75, 1]) s += `<line x1="${L}" x2="${W - Rm}" y1="${y(g)}" y2="${y(g)}" stroke="var(--grid)"/><text x="${L - 6}" y="${y(g) + 3.5}" text-anchor="end">${g.toFixed(2).replace(/0$/, "")}</text>`;
+  s += `<line x1="${L}" x2="${W - Rm}" y1="${y(S.thr[1])}" y2="${y(S.thr[1])}" stroke="var(--crit)" stroke-dasharray="4 4" opacity=".7"/>`;
+  s += `<line x1="${L}" x2="${W - Rm}" y1="${y(S.thr[0])}" y2="${y(S.thr[0])}" stroke="var(--warn)" stroke-dasharray="4 4" opacity=".7"/>`;
+  if (pts.length > 1) s += `<polyline fill="none" stroke="var(--text-muted)" stroke-width="1.5" opacity=".45" points="${pts.map((r, i) => `${x(i)},${y(r.rating.probability)}`).join(" ")}"/>`;
+  pts.forEach((r, i) => {
+    const idx = S.recs.length - pts.length + i;
+    s += `<circle cx="${x(i)}" cy="${y(r.rating.probability)}" r="4.5" fill="${VCOLOR[r.rating.classification]}" stroke="var(--surface-1)" stroke-width="2"/>`;
+    s += `<circle cx="${x(i)}" cy="${y(r.rating.probability)}" r="11" fill="transparent" style="cursor:pointer" data-i="${idx}" data-tip="${esc(r.flow.protocol)} ${esc(r.flow.orig_h)} → ${esc(r.flow.resp_h)}:${r.flow.resp_p}<br><b>${r.rating.classification}</b> · p=${r.rating.probability.toFixed(2)}${topSignal(r) ? "<br>" + esc(topSignal(r)) : ""}"/>`;
+  });
+  if (!pts.length) s += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">waiting for flows…</text>`;
+  s += `<text x="${L}" y="${H - 4}">older</text><text x="${W - Rm}" y="${H - 4}" text-anchor="end">newest</text></svg>`;
+  el.innerHTML = s;
+}
+$("riskChart").onclick = (e) => { const i = e.target.dataset?.i; if (i !== undefined) openDrawer(S.recs[+i]); };
+
+function hbars(items, color, emptyMsg) {
+  if (!items.length) return `<div class="muted" style="font-size:13px">${emptyMsg}</div>`;
+  const max = Math.max(...items.map(i => i[1]));
+  return items.map(([k, v, c]) => `<div class="hbar" data-tip="${esc(k)}: ${v}"><span class="lab" title="${esc(k)}">${esc(k)}</span><span class="tr"><i style="width:${(v / max * 100).toFixed(1)}%;background:${c || color}"></i></span><span class="val">${v}</span></div>`).join("");
+}
+function renderSignals() {
+  const c = {};
+  S.recs.forEach(r => (r.rating.indicators || []).forEach(i => c[i.signal] = (c[i.signal] || 0) + 1));
+  const items = Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  $("sigBars").innerHTML = hbars(items, "var(--accent)", "No indicators fired yet.");
+}
+function renderTls() {
+  const order = ["TLS 1.3", "TLS 1.2", "TLS ≤ 1.1 / SSL", "No TLS (cleartext)"];
+  const c = Object.fromEntries(order.map(k => [k, 0]));
+  S.recs.forEach(r => c[tlsBucket(r)]++);
+  $("tlsBars").innerHTML = hbars(S.recs.length ? order.map(k => [k, c[k]]) : [], "var(--accent)", "No sessions yet.");
+}
+function renderProtos() {
+  const c = { SMTP: 0, IMAP: 0, POP3: 0 };
+  S.recs.forEach(r => c[r.flow.protocol] = (c[r.flow.protocol] || 0) + 1);
+  $("protoBars").innerHTML = hbars(S.recs.length ? Object.entries(c).map(([k, v]) => [k, v, PCOLOR[k]]) : [], "var(--accent)", "No sessions yet.");
+}
+
+/* ------------------------------------------------------------------ tooltip */
+const tip = $("tip");
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest?.("[data-tip]");
+  if (!t) { tip.classList.remove("show"); return; }
+  tip.innerHTML = t.dataset.tip;
+  tip.classList.add("show");
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let lx = e.clientX + 14, ly = e.clientY + 14;
+  if (lx + w > innerWidth - 8) lx = e.clientX - w - 14;
+  if (ly + h > innerHeight - 8) ly = e.clientY - h - 14;
+  tip.style.left = lx + "px"; tip.style.top = ly + "px";
+});
+
+/* ------------------------------------------------------------------ drawer */
+function kv(pairs) {
+  const rows = pairs.filter(([, v]) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length));
+  if (!rows.length) return `<div class="muted" style="font-size:13px">Not observed.</div>`;
+  return `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v === true ? "yes" : v === false ? "no" : esc(Array.isArray(v) ? v.join(", ") : v)}</dd>`).join("")}</dl>`;
+}
+const FEAT_MAX = { duration_s: 10, orig_bytes: 16, resp_bytes: 16, sni_length: 64, sni_entropy: 5, cert_lifespan_days: 4000, cert_pubkey_bits: 4096, cert_subject_entropy: 5, cert_issuer_entropy: 5, email_subject_entropy: 6, tls_version: 1.3 };
+function openDrawer(r) {
+  if (!r) return;
+  S.sel = r;
+  const f = r.flow, t = r.tls || {}, c = r.certificate, m = r.email || {}, rt = r.rating;
+  const p = rt.probability;
+  $("dHead").innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${verdict(rt.classification)} ${proto(f.protocol)} <span class="muted mono">${esc(f.flow_id)} · ${esc(r.source || "")}</span></div>
+    <div class="ep" style="margin-top:8px;font-size:13.5px">${esc(f.orig_h)}:${f.orig_p}<span class="arrow">→</span>${esc(f.resp_h)}:<b>${f.resp_p}</b></div>`;
+  const inds = rt.indicators || [];
+  const feats = Object.entries(r.features || {});
+  $("dBody").innerHTML = `
+    <div class="section">
+      <div class="gauge"><div class="big">${p.toFixed(2)}</div>
+        <div class="sec" style="font-size:13px">threat probability<br><span class="muted">scorer: ${esc(rt.scorer)}${rt.heuristic_probability !== undefined && rt.scorer !== "heuristic" ? ` · heuristic ${rt.heuristic_probability.toFixed(2)}` : ""}</span></div></div>
+      <div class="scale"><div class="needle" style="left:${(p * 100).toFixed(1)}%"></div></div>
+      <div class="scale-labels"><span>0 benign</span><span>${S.thr[0]}</span><span>${S.thr[1]}</span><span>1 malicious</span></div>
+    </div>
+    <div class="section"><h3>Why — evidence</h3>
+      ${inds.length ? inds.map(i => `<div class="ind"><div><div class="name">${esc(i.signal)}</div><div class="detail">${esc(i.detail)}</div></div><div class="w" data-tip="weight ${i.weight}"><i style="width:${i.weight * 100}%"></i></div><div class="mono" style="text-align:right">${i.weight.toFixed(2)}</div></div>`).join("")
+        : `<div class="muted" style="font-size:13px">No risk indicators fired — modern TLS, nothing anomalous.</div>`}
+      ${inds.length ? `<div class="formula" style="margin-top:10px">noisy-OR: P = 1 − ∏(1 − wᵢ) = 1 − ${inds.map(i => `(1−${i.weight})`).join("·")} ≈ ${(1 - inds.reduce((a, i) => a * (1 - i.weight), 1)).toFixed(2)}</div>` : ""}
+    </div>
+    <div class="section"><h3>Session</h3>${kv([
+      ["Started", new Date(f.start * 1000).toLocaleString()], ["Duration", f.duration + " s"],
+      ["Packets c→s / s→c", `${f.orig_pkts} / ${f.resp_pkts}`], ["Bytes c→s / s→c", `${f.orig_bytes} / ${f.resp_bytes}`],
+      ["Implicit TLS port", f.implicit_tls], ["Closed by", f.close_reason], ["Engine", r.engine]])}</div>
+    <div class="section"><h3>TLS handshake</h3>${t.observed ? kv([
+      ["Version", t.version], ["Cipher", t.cipher], ["SNI", t.sni], ["STARTTLS", t.starttls],
+      ["Validation", t.validation_status || "—"], ["SNI matches cert", t.sni_matches_cert],
+      ["Handshake", t.handshake_duration != null ? (t.handshake_duration * 1000).toFixed(0) + " ms" : ""],
+      ["JA3", t.ja3], ["JA3S", t.ja3s], ["Chain length", t.chain_length]])
+      : `<div class="pill-list"><span class="bad">No TLS — session is readable on the wire</span></div>`}</div>
+    <div class="section"><h3>Server certificate</h3>${c ? kv([
+      ["Subject", c.subject], ["Issuer", c.issuer], ["Self-signed", c.self_signed],
+      ["Valid", c.not_before ? `${new Date(c.not_before * 1000).toLocaleDateString()} → ${new Date(c.not_after * 1000).toLocaleDateString()}` : ""],
+      ["Lifespan", c.lifespan_days != null ? c.lifespan_days.toFixed(0) + " days" : ""],
+      ["Key", `${c.key_alg || ""} ${c.key_bits || ""}`.trim()], ["Signature", c.sig_alg], ["SAN", c.san_dns],
+      ["Punycode", c.punycode], ["SHA-256", c.sha256]])
+      : `<div class="muted" style="font-size:13px">${t.observed && /13/.test(t.version || "") ? "Encrypted in TLS 1.3 — not visible to a passive observer." : "Not observed."}</div>`}</div>
+    <div class="section"><h3>Email content (cleartext only)</h3>${kv([
+      ["Commands", m.commands], ["Subjects", m.subjects], ["MAIL FROM", m.mail_from], ["RCPT TO", m.rcpt_to],
+      ["Cleartext auth", m.cleartext_auth || undefined]])}
+      ${(m.attachments || []).length ? `<div class="pill-list" style="margin-top:8px">${m.attachments.map(a => `<span class="${/\.(exe|scr|js|vbs|hta|lnk|iso|bat|cmd|ps1|msi|jar|one|html?)$/i.test(a.filename) ? "bad" : ""}">📎 ${esc(a.filename)} · ${esc(a.mime_type)} · ${a.size} B</span>`).join("")}</div>` : ""}</div>
+    <div class="section"><h3>Feature vector (${feats.length} dims, −1 = missing)</h3>
+      ${feats.map(([k, v]) => { const miss = v === -1; const w = miss ? 0 : Math.min(1, Math.abs(v) / (FEAT_MAX[k] || 1)) * 100;
+        return `<div class="feat"><span class="n" title="${esc(k)}">${esc(k)}</span><span class="t"><i style="width:${w}%"></i></span><span class="v ${miss ? "muted" : ""}">${miss ? "—" : (+v).toFixed(3).replace(/\.?0+$/, "")}</span></div>`; }).join("")}
+    </div>
+    ${(r.notes || []).length ? `<div class="section"><h3>Notes</h3>${r.notes.map(n => `<div class="sec" style="font-size:13px">• ${esc(n)}</div>`).join("")}</div>` : ""}`;
+  $("drawer").classList.add("show"); $("scrim").classList.add("show");
+  $("drawer").setAttribute("aria-hidden", "false");
+  schedule();
+}
+function closeDrawer() {
+  S.sel = null;
+  $("drawer").classList.remove("show"); $("scrim").classList.remove("show");
+  $("drawer").setAttribute("aria-hidden", "true");
+  schedule();
+}
+$("closeDrawer").onclick = closeDrawer; $("scrim").onclick = closeDrawer;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+/* ------------------------------------------------------------------ toasts */
+function toast(r) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = `<div class="t1">${verdict("MALICIOUS")}<span>${esc(r.flow.protocol)} ${esc(r.flow.resp_h)}:${r.flow.resp_p}</span></div>
+    <div class="t2">${(r.rating.indicators || []).slice(0, 3).map(i => esc(i.signal)).join(" · ")} — p=${r.rating.probability.toFixed(2)}</div>`;
+  el.onclick = () => { openDrawer(r); el.remove(); };
+  $("toasts").prepend(el);
+  while ($("toasts").children.length > 3) $("toasts").lastChild.remove();
+  setTimeout(() => el.remove(), 6000);
+}
+
+/* ------------------------------------------------------------------ boot */
+window.addEventListener("resize", schedule);
+loadInfo().catch(e => showError("Could not reach dashboard.py: " + e.message));
+loadState().then(connect).catch(e => { showError(e.message); connect(); });
+</script>
+</body>
+</html>
